@@ -7,7 +7,11 @@ add_subdirectory("/Users/omarilocal/Downloads/JUCE" juce_build)
 # Create an audio application
 juce_add_gui_app(ProceduralBeatMaker
     PRODUCT_NAME "MACHINE LORD HUMAN BANGER FACTORY"
-    VERSION 1.0.0)
+    VERSION 1.0.0
+    PLIST_TO_MERGE "<plist><dict>
+        <key>NSMicrophoneUsageDescription</key>
+        <string>The Machine Lord requires your vocal vibrations to manufacture bangers.</string>
+    </dict></plist>")
 
 # Add our source files
 target_sources(ProceduralBeatMaker PRIVATE

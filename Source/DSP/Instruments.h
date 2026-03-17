@@ -1,7 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 
-// --- STRUCTURED DNA ---
+// --- PATCH DNA ---
 struct SynthPatch {
     float attack = 0.01f, decay = 0.4f, sustain = 0.5f, release = 0.2f;
     float cutoff = 2000.0f, resonance = 1.0f, drive = 1.0f;
@@ -23,7 +23,6 @@ public:
     juce::String sectionId;
 };
 
-// --- CORE VOICE ARCHITECTURE ---
 class BaseVoice : public juce::SynthesiserVoice {
 public:
     void stopNote (float, bool allowTailOff) override { 
@@ -136,17 +135,19 @@ private:
 //==============================================================================
 class VoxStationVoice : public BaseVoice {
 public:
-    VoxStationVoice(std::map<juce::String, juce::AudioBuffer<float>>& buffers) : voxBuffers(buffers) { 
+    VoxStationVoice(std::map<juce::String, juce::AudioBuffer<float>>& buffers, juce::String& activeID) 
+        : voxBuffers(buffers), currentGlobalID(activeID) { 
         ampEnv.setParameters({0.01f, 0.1f, 1.0f, 0.1f}); 
     }
     bool canPlaySound(juce::SynthesiserSound* s) override { 
         auto* cs = dynamic_cast<CustomSound*>(s);
         return cs && cs->note == 84; 
     }
-    void startNote(int n, float v, juce::SynthesiserSound* s, int) override {
+    void startNote (int n, float v, juce::SynthesiserSound* s, int) override {
         auto* cs = dynamic_cast<CustomSound*>(s);
-        if (cs && voxBuffers.count(cs->sectionId) && voxBuffers[cs->sectionId].getNumSamples() > 0) {
-            currentBuffer = &voxBuffers[cs->sectionId];
+        juce::String sid = (cs && cs->sectionId != "") ? cs->sectionId : currentGlobalID;
+        if (voxBuffers.count(sid) && voxBuffers[sid].getNumSamples() > 0) {
+            currentBuffer = &voxBuffers[sid];
             level = v;
             currentSampleIndex = (float)startOffset;
             ampEnv.noteOn();
@@ -168,6 +169,7 @@ public:
     void setChop(int offset, float speed) { startOffset = offset; playbackSpeed = speed; }
 private:
     std::map<juce::String, juce::AudioBuffer<float>>& voxBuffers;
+    juce::String& currentGlobalID;
     juce::AudioBuffer<float>* currentBuffer = nullptr;
     float currentSampleIndex = 0;
     int startOffset = 0;

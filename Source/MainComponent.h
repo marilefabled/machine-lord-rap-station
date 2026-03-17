@@ -18,17 +18,18 @@ public:
         auto w = bounds.getWidth() * level;
         g.fillRoundedRectangle(bounds.withWidth(w), 3.0f);
     }
-    void timerCallback() override { level *= 0.9f; repaint(); }
+    void timerCallback() override { level *= 0.85f; repaint(); }
 private:
     float level = 0.0f;
 };
 
 class SectionComponent : public juce::Component {
 public:
-    SectionComponent(BeatGenerator::Section& s, std::function<void()> regen, std::function<void()> record) 
-        : section(s), onRegen(regen), onRecord(record) {
-        addAndMakeVisible(regenBtn); regenBtn.setButtonText("REGEN"); regenBtn.onClick = [this]{ onRegen(); };
+    SectionComponent(BeatGenerator::Section& s, std::function<void()> regen, std::function<void()> record, std::function<void()> regenDrums) 
+        : section(s), onRegen(regen), onRecord(record), onRegenDrums(regenDrums) {
+        addAndMakeVisible(regenBtn); regenBtn.setButtonText("REGEN ALL"); regenBtn.onClick = [this]{ onRegen(); };
         addAndMakeVisible(recBtn); recBtn.setButtonText("REC"); recBtn.onClick = [this]{ onRecord(); };
+        addAndMakeVisible(drumsBtn); drumsBtn.setButtonText("DRUMS"); drumsBtn.onClick = [this]{ onRegenDrums(); };
     }
     void setRecording(bool isRec) { 
         recBtn.setButtonText(isRec ? "RECORDING..." : "REC");
@@ -50,12 +51,13 @@ public:
     void resized() override {
         auto r = getLocalBounds().reduced(10);
         recBtn.setBounds(r.removeFromBottom(25));
-        regenBtn.setBounds(r.removeFromBottom(25).translated(0, -5));
+        drumsBtn.setBounds(r.removeFromBottom(25).translated(0, -5));
+        regenBtn.setBounds(r.removeFromBottom(25).translated(0, -10));
     }
     BeatGenerator::Section& section;
 private:
-    juce::TextButton regenBtn, recBtn;
-    std::function<void()> onRegen, onRecord;
+    juce::TextButton regenBtn, recBtn, drumsBtn;
+    std::function<void()> onRegen, onRecord, onRegenDrums;
 };
 
 class MainComponent  : public juce::AudioAppComponent, public juce::Timer
@@ -76,11 +78,13 @@ private:
     juce::Viewport timelineViewport;
     juce::Component timelineContent;
 
-    juce::TextButton generateButton { "NEW SONG DNA" }, playButton { "PLAY / STOP" }, exportWavBtn{"EXPORT WAV"}, stopRecBtn{"STOP ALL REC"}, reGenKitBtn{"NEW KIT DNA"};
+    juce::TextButton generateButton { "NEW SONG DNA" }, playButton { "PLAY / STOP" }, exportWavBtn{"EXPORT WAV"}, stopRecBtn{"STOP ALL REC"}, reGenKitBtn{"NEW KIT DNA"}, settingsBtn{"SETTINGS"};
     juce::Slider tempoSlider, swingSlider, fillSlider, ghostSlider, dramaSlider;
-    juce::ComboBox keySelector, scaleSelector, styleSelector;
+    juce::Slider voxChopSlider, voxPitchSlider, voxWetSlider;
+    juce::ComboBox keySelector, scaleSelector, styleSelector, voxMangleSelector;
     juce::Label statusLabel, timeLabel, arrangementLabel, inputLabel;
     juce::Label tempoLabel, swingLabel, fillLabel, ghostLabel, dramaLabel, styleLabel, keyLabel, scaleLabel;
+    juce::Label voxChopLabel, voxPitchLabel, voxWetLabel, voxMangleLabel;
     LevelMeter inputMeter;
 
     juce::TextButton addIntroBtn{"+I"}, addVerseBtn{"+V"}, addHookBtn{"+H"}, addOutroBtn{"+O"}, clearArrBtn{"CLR"};
@@ -88,6 +92,7 @@ private:
 
     std::map<juce::String, juce::AudioBuffer<float>> voxBuffers;
     juce::String activeRecordingId = "";
+    juce::String currentlyTriggeringId = "";
     int writePosition = 0;
 
     juce::Synthesiser synth;
@@ -102,6 +107,9 @@ private:
     void updateTimeLabel();
     void refreshTimeline();
     void requestPermissions();
+    void showAudioSettings();
+
+    juce::CriticalSection songLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

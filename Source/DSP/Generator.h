@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "Instruments.h"
 #include <vector>
+#include <algorithm>
 
 class BeatGenerator
 {
@@ -20,13 +21,6 @@ public:
         DrumParams drumParams; std::vector<Section> sections;
     };
 
-    static DrumKitDNA generateRandomKit() {
-        DrumKitDNA dna; auto& r = juce::Random::getSystemRandom();
-        dna.kick = { r.nextFloat()*0.4f+0.2f, r.nextFloat()*150+50, r.nextFloat()*20+40, r.nextFloat()*2+1 };
-        dna.snare = { 0.1f, 180, 2000 }; dna.hats = { 7000, 0.05f };
-        return dna;
-    }
-
     static Song generateSong(int root, ScaleType scale, RhythmStyle style, float swing, DrumParams dParams, DrumKitDNA kit, const std::vector<SectionType>& arrangement)
     {
         Song song; song.name = "Banger_" + juce::String(juce::Time::getCurrentTime().toMilliseconds());
@@ -36,26 +30,63 @@ public:
         return song;
     }
 
+    static void mutateDrums(Section& s, const Song& song) {
+        s.events.erase(std::remove_if(s.events.begin(), s.events.end(), [](const NoteEvent& e) {
+            return e.midiNote == 36 || e.midiNote == 38 || e.midiNote == 39 || e.midiNote == 42 || e.midiNote == 56;
+        }), s.events.end());
+
+        auto& r = juce::Random::getSystemRandom();
+        for (int bar = 0; bar < s.numBars; ++bar) {
+            int offset = bar * 16;
+            bool isFillBar = (bar % 4 == 3 && r.nextFloat() < song.drumParams.fillChance);
+
+            for (int step = 0; step < 16; ++step) {
+                int gs = offset + step; float sw = (step%2!=0)?song.swing*0.5f:0;
+                if (r.nextFloat() < song.drumParams.dropNoteProb) continue;
+
+                // --- KICK (Solid foundation for each style) ---
+                if (step == 0 || (song.style == Trap && step == 6) || (song.style == BoomBap && step == 9 && r.nextFloat() < 0.6f)) {
+                    s.events.push_back({gs, 36, 1.0f, sw, s.id});
+                } else if (r.nextFloat() < song.drumParams.ghostNoteProb) {
+                    s.events.push_back({gs, 36, 0.4f, sw, s.id});
+                }
+
+                // --- SNARE / CLAP ---
+                if (step == 4 || step == 12) {
+                    s.events.push_back({gs, 38, 0.9f, sw, s.id});
+                    if (song.style == Trap && r.nextFloat() > 0.5f) s.events.push_back({gs, 39, 0.8f, sw, s.id});
+                }
+
+                // --- HI-HATS (Style-defining logic) ---
+                if (song.style == Trap) {
+                    // Constant 16ths for Trap
+                    s.events.push_back({gs, 42, 0.4f + r.nextFloat()*0.2f, sw, s.id});
+                } else {
+                    // Standard 8ths for BoomBap/LoFi
+                    if (step % 2 == 0) s.events.push_back({gs, 42, 0.5f, sw, s.id});
+                    else if (r.nextFloat() < song.drumParams.ghostNoteProb) s.events.push_back({gs, 42, 0.2f, sw, s.id});
+                }
+
+                // --- FILLS ---
+                if (isFillBar && step > 12) {
+                    int fillNote = (r.nextFloat() > 0.5f) ? 38 : 42;
+                    s.events.push_back({gs, fillNote, 0.7f, 0.1f, s.id});
+                }
+            }
+        }
+    }
+
     static Section generateSingleSection(const Song& song, SectionType type) {
         Section s; s.type = type; s.numBars = (type == Verse || type == Hook) ? 8 : 4;
         s.id = "SID_" + juce::String(juce::Random::getSystemRandom().nextInt64());
+        mutateDrums(s, song);
+
         auto& r = juce::Random::getSystemRandom();
         std::vector<int> scale; int intervals[] = {0,2,3,5,7,8,10};
         for(int i : intervals) scale.push_back(song.rootKey + i);
 
         for (int bar = 0; bar < s.numBars; ++bar) {
             int offset = bar * 16;
-            for (int step = 0; step < 16; ++step) {
-                int gs = offset + step; float sw = (step%2!=0)?song.swing*0.5f:0;
-                if (r.nextFloat() < song.drumParams.dropNoteProb) continue;
-
-                if (step == 0 || (song.style == Trap && step == 6)) s.events.push_back({gs, 36, 1.0f, sw, s.id});
-                if (step == 4 || step == 12) s.events.push_back({gs, 38, 0.9f, sw, s.id});
-                if (step % 2 == 0) s.events.push_back({gs, 42, 0.5f, sw, s.id});
-                else if (r.nextFloat() < song.drumParams.ghostNoteProb) s.events.push_back({gs, 42, 0.2f, sw, s.id});
-
-                if (type == Hook && step % 8 == 0) s.events.push_back({gs, 84, 0.8f, sw, s.id});
-            }
             if (type != Intro) {
                 int chordRoot = scale[(bar/2)%3 == 1 ? 3 : ((bar/2)%3 == 2 ? 4 : 0)];
                 s.events.push_back({offset, chordRoot - 12, 0.7f, 0, s.id});
@@ -76,5 +107,13 @@ public:
         else if (type == "Pad") { p.attack = 0.8f; p.release = 1.5f; p.cutoff = 600; p.oscType = 1; }
         else { p.attack = 0.05f; p.decay = 0.2f; p.cutoff = 2000; p.resonance = 3.0f; p.oscType = r.nextInt(3); }
         p.drive = r.nextFloat()*2+1; return p;
+    }
+
+    static DrumKitDNA generateRandomKit() {
+        DrumKitDNA dna; auto& r = juce::Random::getSystemRandom();
+        dna.kick = { 0.4f, 100, 50, 1.5f };
+        dna.snare = { 0.1f, 180, 2000 };
+        dna.hats = { 7000, 0.05f };
+        return dna;
     }
 };
