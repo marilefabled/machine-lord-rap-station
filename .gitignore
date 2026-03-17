@@ -1,0 +1,10 @@
+/cmake-build-debug/
+/cmake-build-release/
+/out/
+/.idea/
+/.vscode/
+/JuceLibraryCode/
+/ProceduralBeatMaker_artefacts/
+.DS_Store
+*.wav
+*.xml
