@@ -20,6 +20,13 @@ public:
         DrumParams drumParams; std::vector<Section> sections;
     };
 
+    static DrumKitDNA generateRandomKit() {
+        DrumKitDNA dna; auto& r = juce::Random::getSystemRandom();
+        dna.kick = { r.nextFloat()*0.4f+0.2f, r.nextFloat()*150+50, r.nextFloat()*20+40, r.nextFloat()*2+1 };
+        dna.snare = { 0.1f, 180, 2000 }; dna.hats = { 7000, 0.05f };
+        return dna;
+    }
+
     static Song generateSong(int root, ScaleType scale, RhythmStyle style, float swing, DrumParams dParams, DrumKitDNA kit, const std::vector<SectionType>& arrangement)
     {
         Song song; song.name = "Banger_" + juce::String(juce::Time::getCurrentTime().toMilliseconds());
@@ -45,8 +52,8 @@ public:
                 if (step == 0 || (song.style == Trap && step == 6)) s.events.push_back({gs, 36, 1.0f, sw, s.id});
                 if (step == 4 || step == 12) s.events.push_back({gs, 38, 0.9f, sw, s.id});
                 if (step % 2 == 0) s.events.push_back({gs, 42, 0.5f, sw, s.id});
+                else if (r.nextFloat() < song.drumParams.ghostNoteProb) s.events.push_back({gs, 42, 0.2f, sw, s.id});
 
-                // Algorithmically matching Vox triggers
                 if (type == Hook && step % 8 == 0) s.events.push_back({gs, 84, 0.8f, sw, s.id});
             }
             if (type != Intro) {
@@ -56,7 +63,6 @@ public:
                     s.events.push_back({offset, chordRoot, 0.4f, 0, s.id});
                     s.events.push_back({offset, chordRoot+3, 0.3f, 0, s.id});
                     s.events.push_back({offset, chordRoot+7, 0.3f, 0, s.id});
-                    // Melodic Intelligence: scale-aware lead
                     s.events.push_back({offset+8, scale[r.nextInt(5)] + 12, 0.5f, 0, s.id});
                 }
             }
@@ -70,13 +76,5 @@ public:
         else if (type == "Pad") { p.attack = 0.8f; p.release = 1.5f; p.cutoff = 600; p.oscType = 1; }
         else { p.attack = 0.05f; p.decay = 0.2f; p.cutoff = 2000; p.resonance = 3.0f; p.oscType = r.nextInt(3); }
         p.drive = r.nextFloat()*2+1; return p;
-    }
-
-    static DrumKitDNA generateRandomKit() {
-        DrumKitDNA dna; auto& r = juce::Random::getSystemRandom();
-        dna.kick = { 0.4f, 100, 50, 1.5f };
-        dna.snare = { 0.1f, 180, 2000 };
-        dna.hats = { 7000, 0.05f };
-        return dna;
     }
 };

@@ -1,7 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 
-// --- ENHANCED DNA ---
+// --- STRUCTURED DNA ---
 struct SynthPatch {
     float attack = 0.01f, decay = 0.4f, sustain = 0.5f, release = 0.2f;
     float cutoff = 2000.0f, resonance = 1.0f, drive = 1.0f;
@@ -23,6 +23,7 @@ public:
     juce::String sectionId;
 };
 
+// --- CORE VOICE ARCHITECTURE ---
 class BaseVoice : public juce::SynthesiserVoice {
 public:
     void stopNote (float, bool allowTailOff) override { 
@@ -53,6 +54,46 @@ public:
     void applyDNA(const DrumKitDNA::Kick& k) { dna = k; ampEnv.setParameters({0.001f, dna.decay, 0.0f, 0.1f}); }
 private:
     juce::dsp::Oscillator<float> osc; juce::ADSR pitchEnv; DrumKitDNA::Kick dna;
+};
+
+//==============================================================================
+class SnareVoice : public BaseVoice {
+public:
+    SnareVoice() { toneOsc.initialise([](float x){return std::sin(x);}); filter.setType(juce::dsp::StateVariableTPTFilterType::bandpass); }
+    bool canPlaySound (juce::SynthesiserSound* s) override { return dynamic_cast<CustomSound*>(s) && dynamic_cast<CustomSound*>(s)->note == 38; }
+    void startNote (int, float v, juce::SynthesiserSound*, int) override { level = v; ampEnv.noteOn(); noiseEnv.noteOn(); }
+    void prepareToPlay (double sR, int, int) { toneOsc.prepare({sR,512,2}); filter.prepare({sR,512,2}); ampEnv.setSampleRate(sR); noiseEnv.setSampleRate(sR); }
+    void renderNextBlock (juce::AudioBuffer<float>& b, int s, int n) override {
+        if (!ampEnv.isActive() && !noiseEnv.isActive()) { clearCurrentNote(); return; }
+        for (int i=s; i<s+n; ++i) {
+            float nz = filter.processSample(0, ((juce::Random::getSystemRandom().nextFloat()*2.0f)-1.0f)*noiseEnv.getNextSample());
+            float smp = (toneOsc.processSample(0.0f)*ampEnv.getNextSample() + nz)*level * 0.8f;
+            for (int c=0; c<b.getNumChannels(); ++c) b.addSample(c, i, smp);
+        }
+    }
+    void applyDNA(const DrumKitDNA::Snare& sn) { dna=sn; toneOsc.setFrequency(dna.tone); filter.setCutoffFrequency(dna.noiseColor); noiseEnv.setParameters({0.001f,dna.snap,0.0f,0.001f}); ampEnv.setParameters({0.001f,0.1f,0.0f,0.001f}); }
+private:
+    juce::dsp::Oscillator<float> toneOsc; juce::dsp::StateVariableTPTFilter<float> filter; juce::ADSR noiseEnv; DrumKitDNA::Snare dna;
+};
+
+//==============================================================================
+class HiHatVoice : public BaseVoice {
+public:
+    HiHatVoice() { float f[6]={245,306,384,496,638,822}; for (int i=0;i<6;++i){oscs[i].initialise([](float x){return x<0?-1.0f:1.0f;});oscs[i].setFrequency(f[i]);} filter.setType(juce::dsp::StateVariableTPTFilterType::highpass); }
+    bool canPlaySound (juce::SynthesiserSound* s) override { return dynamic_cast<CustomSound*>(s) && dynamic_cast<CustomSound*>(s)->note == 42; }
+    void startNote (int,float v,juce::SynthesiserSound*,int) override { level=v; ampEnv.noteOn(); }
+    void prepareToPlay(double sR,int,int){ for(int i=0;i<6;++i)oscs[i].prepare({sR,512,2}); filter.prepare({sR,512,2}); ampEnv.setSampleRate(sR); }
+    void renderNextBlock(juce::AudioBuffer<float>& b,int s,int n) override {
+        if(!ampEnv.isActive()){clearCurrentNote();return;}
+        for(int i=s; i<s+n; ++i){
+            float sum=0; for(int j=0;j<6;++j)sum+=oscs[j].processSample(0.0f);
+            float smp=filter.processSample(0,sum*0.15f)*ampEnv.getNextSample()*level;
+            for(int c=0;c<b.getNumChannels();++c) b.addSample(c,i,smp);
+        }
+    }
+    void applyDNA(const DrumKitDNA::Hats& h){ dna=h; filter.setCutoffFrequency(dna.cutoff); ampEnv.setParameters({0.001f,dna.decay,0.0f,0.01f}); }
+private:
+    juce::dsp::Oscillator<float> oscs[6]; juce::dsp::StateVariableTPTFilter<float> filter; DrumKitDNA::Hats dna;
 };
 
 //==============================================================================

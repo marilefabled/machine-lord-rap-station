@@ -2,8 +2,11 @@
 
 MainComponent::MainComponent()
 {
+    setLookAndFeel(&factoryLF);
     setSize (1200, 900);
+    recordedVoxBuffer.setSize(1, 44100 * 8);
 
+    // Setup Synth
     for(int i=0; i<4; ++i) synth.addVoice(new KickVoice());
     for(int i=0; i<2; ++i) synth.addVoice(new PolySynthVoice(48)); 
     for(int i=0; i<8; ++i) synth.addVoice(new PolySynthVoice(60)); 
@@ -20,16 +23,24 @@ MainComponent::MainComponent()
         s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 20);
     };
 
-    setupS(tempoSlider, 40, 180, 90); setupS(swingSlider, 0, 1, 0);
-    setupS(fillSlider, 0, 1, 0.3f); setupS(ghostSlider, 0, 1, 0.2f); setupS(dramaSlider, 0, 0.3f, 0.05f);
+    auto setupL = [this](juce::Label& l, juce::String text) {
+        addAndMakeVisible(l);
+        l.setText(text, juce::dontSendNotification);
+        l.setJustificationType(juce::Justification::centred);
+    };
 
-    addAndMakeVisible(keySelector); keySelector.addItemList({"C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"}, 1); keySelector.setSelectedItemIndex(0);
-    addAndMakeVisible(scaleSelector); scaleSelector.addItemList({"Minor","Phrygian","Dorian"}, 1); scaleSelector.setSelectedItemIndex(0);
-    addAndMakeVisible(styleSelector); styleSelector.addItemList({"Boom Bap","Trap","Lo-Fi"}, 1); styleSelector.setSelectedItemIndex(0);
+    setupS(tempoSlider, 40, 180, 90); setupL(tempoLabel, "BPM");
+    setupS(swingSlider, 0, 1, 0); setupL(swingLabel, "SWING");
+    setupS(fillSlider, 0, 1, 0.3f); setupL(fillLabel, "FILLS");
+    setupS(ghostSlider, 0, 1, 0.2f); setupL(ghostLabel, "GHOSTS");
+    setupS(dramaSlider, 0, 0.3f, 0.05f); setupL(dramaLabel, "DRAMA");
+
+    addAndMakeVisible(keySelector); keySelector.addItemList({"C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"}, 1); keySelector.setSelectedItemIndex(0); setupL(keyLabel, "KEY");
+    addAndMakeVisible(scaleSelector); scaleSelector.addItemList({"Minor","Phrygian","Dorian"}, 1); scaleSelector.setSelectedItemIndex(0); setupL(scaleLabel, "SCALE");
+    addAndMakeVisible(styleSelector); styleSelector.addItemList({"Boom Bap","Trap","Lo-Fi"}, 1); styleSelector.setSelectedItemIndex(0); setupL(styleLabel, "STYLE");
 
     addAndMakeVisible(timelineViewport);
     timelineViewport.setViewedComponent(&timelineContent, false);
-    timelineContent.setSize(2000, 180);
 
     auto addP = [this](juce::TextButton& b, BeatGenerator::SectionType t) {
         addAndMakeVisible(b); b.onClick = [this,t]{ currentArrangement.push_back(t); updateTimeLabel(); };
@@ -44,43 +55,63 @@ MainComponent::MainComponent()
         auto dParams = BeatGenerator::DrumParams{ (float)fillSlider.getValue(), (float)ghostSlider.getValue(), (float)dramaSlider.getValue() };
         currentSong = BeatGenerator::generateSong(60+keySelector.getSelectedItemIndex(), (BeatGenerator::ScaleType)scaleSelector.getSelectedItemIndex(), (BeatGenerator::RhythmStyle)styleSelector.getSelectedItemIndex(), (float)swingSlider.getValue(), dParams, currentKit, currentArrangement);
         updateKitDNA(); refreshTimeline(); updateTimeLabel();
+        statusLabel.setText("FACTORY READY: " + currentSong.name, juce::dontSendNotification);
+    };
+
+    addAndMakeVisible(reGenKitBtn);
+    reGenKitBtn.onClick = [this] {
+        currentKit = BeatGenerator::generateRandomKit();
+        updateKitDNA();
+        statusLabel.setText("NEW KIT DNA APPLIED", juce::dontSendNotification);
     };
 
     addAndMakeVisible(playButton);
     playButton.onClick = [this] {
-        if (isPlaying) { stopTimer(); isPlaying = false; synth.allNotesOff(0, true); }
+        if (isPlaying) { stopTimer(); isPlaying = false; synth.allNotesOff(0, true); statusLabel.setText("STOPPED", juce::dontSendNotification); }
         else {
             if (currentSong.sections.empty()) return;
             currentSectionIndex = 0; songStepCounter = 0;
             startTimer(60000/(tempoSlider.getValue()*4)); isPlaying = true;
+            statusLabel.setText("PLAYING...", juce::dontSendNotification);
         }
     };
 
     addAndMakeVisible(exportWavBtn); exportWavBtn.onClick = [this]{ exportToWav(); };
-    addAndMakeVisible(stopRecBtn); stopRecBtn.onClick = [this]{ activeRecordingId = ""; statusLabel.setText("RECORDING STOPPED", juce::dontSendNotification); };
+    addAndMakeVisible(stopRecBtn); stopRecBtn.onClick = [this]{ activeRecordingId = ""; for(auto* v : sectionViews) v->setRecording(false); statusLabel.setText("REC STOPPED", juce::dontSendNotification); };
 
+    addAndMakeVisible(inputMeter);
+    addAndMakeVisible(inputLabel); inputLabel.setText("MIC IN", juce::dontSendNotification);
     addAndMakeVisible(timeLabel); addAndMakeVisible(statusLabel);
-    addAndMakeVisible(arrangementLabel);
+    
     currentKit = BeatGenerator::generateRandomKit();
-    setAudioChannels (1, 2);
+    requestPermissions();
 }
 
-MainComponent::~MainComponent() { shutdownAudio(); }
+MainComponent::~MainComponent() { setLookAndFeel(nullptr); shutdownAudio(); }
+
+void MainComponent::requestPermissions() {
+    if (juce::RuntimePermissions::isRequired (juce::RuntimePermissions::recordAudio)
+        && ! juce::RuntimePermissions::isGranted (juce::RuntimePermissions::recordAudio)) {
+        juce::RuntimePermissions::request (juce::RuntimePermissions::recordAudio,
+            [&] (bool granted) { setAudioChannels (granted ? 1 : 0, 2); });
+    } else {
+        setAudioChannels (1, 2);
+    }
+}
 
 void MainComponent::refreshTimeline() {
     sectionViews.clear();
     int x = 10;
     for (int i=0; i < (int)currentSong.sections.size(); ++i) {
         auto* v = new SectionComponent(currentSong.sections[i], 
-            [this, i]{
-                currentSong.sections[i] = BeatGenerator::generateSingleSection(currentSong, currentSong.sections[i].type);
-                refreshTimeline();
-            },
-            [this, i]{
+            [this, i]{ currentSong.sections[i] = BeatGenerator::generateSingleSection(currentSong, currentSong.sections[i].type); refreshTimeline(); },
+            [this, i]{ 
                 activeRecordingId = currentSong.sections[i].id;
                 voxBuffers[activeRecordingId].setSize(1, 44100 * 8); 
                 writePosition = 0;
-                statusLabel.setText("RECORDING VOX FOR PART " + juce::String(i+1), juce::dontSendNotification);
+                for(auto* sv : sectionViews) sv->setRecording(false);
+                sectionViews[i]->setRecording(true);
+                statusLabel.setText("RECORDING PART " + juce::String(i+1), juce::dontSendNotification);
             });
         timelineContent.addAndMakeVisible(v);
         v->setBounds(x, 10, 150, 160);
@@ -96,7 +127,7 @@ void MainComponent::updateTimeLabel() {
     if (totalSteps == 0) for (auto t : currentArrangement) totalSteps += (t == BeatGenerator::Verse || t == BeatGenerator::Hook) ? 128 : 64;
     float totalSecs = (totalSteps * 60.0f) / (tempoSlider.getValue() * 4.0f);
     int mins = (int)totalSecs / 60; int secs = (int)totalSecs % 60;
-    timeLabel.setText("SONG DURATION: " + juce::String(mins) + ":" + (secs < 10 ? "0" : "") + juce::String(secs), juce::dontSendNotification);
+    timeLabel.setText("DURATION: " + juce::String(mins) + ":" + (secs < 10 ? "0" : "") + juce::String(secs), juce::dontSendNotification);
 }
 
 void MainComponent::updateKitDNA() {
@@ -117,14 +148,15 @@ void MainComponent::timerCallback() {
     auto& sec = currentSong.sections[currentSectionIndex];
     for (const auto& e : sec.events) {
         if (e.step == songStepCounter) {
-            if (e.timeOffset > 0) juce::Timer::callAfterDelay((int)(e.timeOffset*50), [this,e]{ synth.noteOn(1, e.midiNote, e.velocity); });
+            auto sound = CustomSound(e.midiNote, e.sectionId);
+            if (e.timeOffset > 0) juce::Timer::callAfterDelay((int)(e.timeOffset*50), [this,e,sound]{ synth.noteOn(1, e.midiNote, e.velocity); });
             else synth.noteOn(1, e.midiNote, e.velocity);
         }
     }
     songStepCounter++;
     if (songStepCounter >= sec.numBars * 16) {
         songStepCounter = 0; currentSectionIndex++;
-        if (currentSectionIndex < (int)currentSong.sections.size()) statusLabel.setText("PLAYING: PART " + juce::String(currentSectionIndex+1), juce::dontSendNotification);
+        if (currentSectionIndex < (int)currentSong.sections.size()) statusLabel.setText("PART: " + juce::String(currentSectionIndex+1), juce::dontSendNotification);
     }
 }
 
@@ -140,51 +172,84 @@ void MainComponent::prepareToPlay (int, double sR) {
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& b) {
-    if (activeRecordingId != "") {
+    if (b.buffer->getNumChannels() > 0) {
         auto* in = b.buffer->getReadPointer(0, b.startSample);
-        auto& buf = voxBuffers[activeRecordingId];
-        for (int i=0; i<b.numSamples; ++i) { 
-            if (writePosition < buf.getNumSamples()) buf.setSample(0, writePosition++, in[i]); 
-            else activeRecordingId = ""; 
+        float maxIn = 0;
+        for(int i=0; i<b.numSamples; ++i) maxIn = juce::jmax(maxIn, std::abs(in[i]));
+        inputMeter.setLevel(maxIn);
+        if (activeRecordingId != "") {
+            auto& buf = voxBuffers[activeRecordingId];
+            for (int i=0; i<b.numSamples; ++i) { 
+                if (writePosition < buf.getNumSamples()) buf.setSample(0, writePosition++, in[i]); 
+                else { activeRecordingId = ""; for(auto* sv : sectionViews) sv->setRecording(false); }
+            }
         }
     }
     b.clearActiveBufferRegion(); synth.renderNextBlock (*b.buffer, {}, b.startSample, b.numSamples);
 }
 
 void MainComponent::paint (juce::Graphics& g) {
-    g.fillAll (juce::Colour(0xff0a0a0a)); g.setColour(juce::Colours::orange); g.drawRect(getLocalBounds().reduced(5), 2);
-    g.setColour (juce::Colours::white); g.setFont (32.0f);
+    g.fillAll (juce::Colour(0xff0a0a0a)); 
+    g.setColour(juce::Colours::orange.withAlpha(0.5f)); g.drawRect(getLocalBounds().reduced(5), 2);
+    g.setColour (juce::Colours::white); g.setFont (juce::FontOptions(24.0f).withStyle("Bold"));
     g.drawText ("MACHINE LORD RAP STATION", 30, 30, 600, 40, juce::Justification::left);
 }
 
 void MainComponent::resized() {
     auto area = getLocalBounds().reduced(30); area.removeFromTop(80);
+    
+    // 1. TIMELINE
     timelineViewport.setBounds(area.removeFromTop(200).reduced(10));
-    
-    auto createPanel = area.removeFromTop(120);
-    auto arrBtns = createPanel.removeFromTop(50);
-    int bW = arrBtns.getWidth()/6;
-    addIntroBtn.setBounds(arrBtns.removeFromLeft(bW).reduced(5));
-    addVerseBtn.setBounds(arrBtns.removeFromLeft(bW).reduced(5));
-    addHookBtn.setBounds(arrBtns.removeFromLeft(bW).reduced(5));
-    addOutroBtn.setBounds(arrBtns.removeFromLeft(bW).reduced(5));
-    clearArrBtn.setBounds(arrBtns.removeFromLeft(bW).reduced(5));
-    stopRecBtn.setBounds(arrBtns.reduced(5));
-    
-    generateButton.setBounds(createPanel.reduced(200, 5));
+    area.removeFromTop(20);
 
-    auto sliderPanel = area.removeFromTop(200);
-    int sW = sliderPanel.getWidth()/5;
-    tempoSlider.setBounds(sliderPanel.removeFromLeft(sW).reduced(10));
-    swingSlider.setBounds(sliderPanel.removeFromLeft(sW).reduced(10));
-    fillSlider.setBounds(sliderPanel.removeFromLeft(sW).reduced(10));
-    ghostSlider.setBounds(sliderPanel.removeFromLeft(sW).reduced(10));
-    dramaSlider.setBounds(sliderPanel.reduced(10));
+    // 2. CONTROL PANEL
+    auto topRow = area.removeFromTop(140);
+    
+    // Selectors & Labels
+    auto selectors = topRow.removeFromLeft(topRow.getWidth() * 0.4f);
+    int selW = selectors.getWidth() / 3;
+    
+    auto s1 = selectors.removeFromLeft(selW); styleLabel.setBounds(s1.removeFromTop(25)); styleSelector.setBounds(s1.reduced(5, 15));
+    auto s2 = selectors.removeFromLeft(selW); keyLabel.setBounds(s2.removeFromTop(25)); keySelector.setBounds(s2.reduced(5, 15));
+    auto s3 = selectors; scaleLabel.setBounds(s3.removeFromTop(25)); scaleSelector.setBounds(s3.reduced(5, 15));
 
-    playButton.setBounds(area.removeFromBottom(100).reduced(250, 10));
-    exportWavBtn.setBounds(area.removeFromBottom(40).reduced(350, 0));
-    timeLabel.setBounds(area.removeFromBottom(30));
-    statusLabel.setBounds(area.removeFromBottom(30));
+    // Arrangement Buttons
+    auto arrRow = topRow.removeFromLeft(topRow.getWidth() * 0.6f);
+    int bW = arrRow.getWidth() / 6;
+    addIntroBtn.setBounds(arrRow.removeFromLeft(bW).reduced(5, 30));
+    addVerseBtn.setBounds(arrRow.removeFromLeft(bW).reduced(5, 30));
+    addHookBtn.setBounds(arrRow.removeFromLeft(bW).reduced(5, 30));
+    addOutroBtn.setBounds(arrRow.removeFromLeft(bW).reduced(5, 30));
+    clearArrBtn.setBounds(arrRow.removeFromLeft(bW).reduced(5, 30));
+    stopRecBtn.setBounds(arrRow.reduced(5, 30));
+
+    generateButton.setBounds(area.removeFromTop(60).reduced(250, 5));
+    area.removeFromTop(20);
+
+    // 3. KNOB LAB
+    auto sliderPanel = area.removeFromTop(220);
+    int sW = sliderPanel.getWidth() / 6;
+    
+    auto sl1 = sliderPanel.removeFromLeft(sW); tempoLabel.setBounds(sl1.removeFromTop(25)); tempoSlider.setBounds(sl1.reduced(5));
+    auto sl2 = sliderPanel.removeFromLeft(sW); swingLabel.setBounds(sl2.removeFromTop(25)); swingSlider.setBounds(sl2.reduced(5));
+    auto sl3 = sliderPanel.removeFromLeft(sW); fillLabel.setBounds(sl3.removeFromTop(25)); fillSlider.setBounds(sl3.reduced(5));
+    auto sl4 = sliderPanel.removeFromLeft(sW); ghostLabel.setBounds(sl4.removeFromTop(25)); ghostSlider.setBounds(sl4.reduced(5));
+    auto sl5 = sliderPanel.removeFromLeft(sW); dramaLabel.setBounds(sl5.removeFromTop(25)); dramaSlider.setBounds(sl5.reduced(5));
+    
+    auto sideActions = sliderPanel.reduced(10, 40);
+    reGenKitBtn.setBounds(sideActions.removeFromTop(sideActions.getHeight()/2).reduced(0, 10));
+    exportWavBtn.setBounds(sideActions.reduced(0, 10));
+
+    // 4. TRANSPORT & METER
+    auto bottom = area.removeFromBottom(120);
+    playButton.setBounds(bottom.removeFromTop(70).reduced(250, 0));
+    
+    auto meterArea = bottom.reduced(150, 10);
+    inputLabel.setBounds(meterArea.removeFromLeft(60));
+    inputMeter.setBounds(meterArea.reduced(0, 10));
+
+    timeLabel.setBounds(30, getHeight() - 40, 200, 30);
+    statusLabel.setBounds(getWidth() - 330, getHeight() - 40, 300, 30);
 }
 
 void MainComponent::exportToWav() {}
