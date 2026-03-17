@@ -13,6 +13,13 @@ juce_add_gui_app(ProceduralBeatMaker
         <string>The Machine Lord requires your vocal vibrations to manufacture bangers.</string>
     </dict></plist>")
 
+# macOS specific: Apply microphone entitlements
+if(APPLE)
+    set_target_properties(ProceduralBeatMaker PROPERTIES
+        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/Microphone.entitlements"
+    )
+endif()
+
 # Add our source files
 target_sources(ProceduralBeatMaker PRIVATE
     Source/Main.cpp

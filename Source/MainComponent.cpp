@@ -16,9 +16,9 @@ MainComponent::MainComponent()
     for(int i=0; i<4; ++i) synth.addVoice(new VoxStationVoice(voxBuffers, currentlyTriggeringId)); 
     
     synth.addSound(new CustomSound(36)); synth.addSound(new CustomSound(38));
-    synth.addSound(new CustomSound(42)); synth.addSound(new CustomSound(48));
-    synth.addSound(new CustomSound(60)); synth.addSound(new CustomSound(72));
-    synth.addSound(new CustomSound(84));
+    synth.addSound(new CustomSound(39)); synth.addSound(new CustomSound(42));
+    synth.addSound(new CustomSound(48)); synth.addSound(new CustomSound(60));
+    synth.addSound(new CustomSound(72)); synth.addSound(new CustomSound(84));
 
     auto setupS = [this](juce::Slider& s, float min, float max, float def) {
         addAndMakeVisible(s); s.setRange(min, max); s.setValue(def);
@@ -65,7 +65,7 @@ MainComponent::MainComponent()
         statusLabel.setText("FACTORY READY", juce::dontSendNotification);
     };
 
-    addAndMakeVisible(reGenKitBtn); reGenKitBtn.onClick = [this] { currentKit = BeatGenerator::generateRandomKit(); updateKitDNA(); };
+    addAndMakeVisible(reGenKitBtn); reGenKitBtn.onClick = [this] { currentKit = BeatGenerator::generateRandomKit(); updateKitDNA(); statusLabel.setText("NEW KIT DNA", juce::dontSendNotification); };
     addAndMakeVisible(settingsBtn); settingsBtn.onClick = [this] { showAudioSettings(); };
 
     addAndMakeVisible(playButton);
@@ -82,7 +82,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(exportWavBtn); exportWavBtn.onClick = [this]{ exportToWav(); };
     addAndMakeVisible(stopRecBtn); stopRecBtn.onClick = [this]{ activeRecordingId = ""; for(auto* v : sectionViews) v->setRecording(false); statusLabel.setText("REC STOPPED", juce::dontSendNotification); };
 
-    addAndMakeVisible(inputMeter);
+    addAndMakeVisible(inputMeter); addAndMakeVisible(visualizer);
     addAndMakeVisible(inputLabel); inputLabel.setText("MIC IN", juce::dontSendNotification);
     addAndMakeVisible(timeLabel); addAndMakeVisible(statusLabel);
     
@@ -99,16 +99,12 @@ void MainComponent::showAudioSettings() {
     options.content.setOwned(selector);
     options.dialogTitle = "AUDIO SETTINGS";
     options.componentToCentreAround = this;
-    options.resizable = false;
     options.launchAsync();
 }
 
 void MainComponent::requestPermissions() {
     juce::RuntimePermissions::request (juce::RuntimePermissions::recordAudio,
-        [&] (bool granted) { 
-            if (granted) setAudioChannels (1, 2); 
-            else statusLabel.setText("MIC ACCESS DENIED", juce::dontSendNotification);
-        });
+        [&] (bool granted) { if (granted) setAudioChannels (1, 2); });
 }
 
 void MainComponent::exportToWav() {
@@ -127,6 +123,8 @@ void MainComponent::exportToWav() {
                 currentlyTriggeringId = section.id;
                 for (int step=0; step < section.numBars * 16; ++step) {
                     renderBuffer.clear();
+                    // KILL OLD NOTES FIRST
+                    synth.allNotesOff(0, false);
                     for (auto& e : section.events) { if (e.step == step) synth.noteOn(1, e.midiNote, e.velocity); }
                     synth.renderNextBlock(renderBuffer, {}, 0, stepSize);
                     writer->writeFromAudioSampleBuffer(renderBuffer, 0, stepSize);
@@ -145,8 +143,7 @@ void MainComponent::refreshTimeline() {
             [this, i]{ const juce::ScopedLock sl(songLock); currentSong.sections[i] = BeatGenerator::generateSingleSection(currentSong, currentSong.sections[i].type); refreshTimeline(); },
             [this, i]{ 
                 activeRecordingId = currentSong.sections[i].id;
-                voxBuffers[activeRecordingId].setSize(1, 44100 * 8); 
-                voxBuffers[activeRecordingId].clear();
+                voxBuffers[activeRecordingId].setSize(1, 44100 * 8); voxBuffers[activeRecordingId].clear();
                 writePosition = 0;
                 for(auto* sv : sectionViews) sv->setRecording(false);
                 sectionViews[i]->setRecording(true);
@@ -196,6 +193,10 @@ void MainComponent::timerCallback() {
     if (currentSectionIndex >= (int)currentSong.sections.size()) { stopTimer(); isPlaying = false; synth.allNotesOff(0, true); return; }
     auto& sec = currentSong.sections[currentSectionIndex];
     currentlyTriggeringId = sec.id;
+
+    // --- CRITICAL: Kill old notes every step for rhythm ---
+    synth.allNotesOff(0, false);
+
     for (const auto& e : sec.events) {
         if (e.step == songStepCounter) {
             if (e.timeOffset > 0) juce::Timer::callAfterDelay((int)(e.timeOffset*50), [this,e]{ synth.noteOn(1, e.midiNote, e.velocity); });
@@ -211,6 +212,8 @@ void MainComponent::timerCallback() {
 
 void MainComponent::prepareToPlay (int, double sR) {
     synth.setCurrentPlaybackSampleRate (sR);
+    juce::dsp::ProcessSpec spec { sR, 512, 2 };
+    reverb.prepare(spec); reverb.setParameters({0.5f, 0.5f, 0.1f, 0.1f, 0.1f, 0.1f});
     for (int i=0; i<synth.getNumVoices(); ++i) {
         if (auto* v = synth.getVoice(i)) {
             if (auto* kv = dynamic_cast<KickVoice*>(v)) kv->prepareToPlay(sR, 512, 2);
@@ -226,17 +229,23 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& b) {
     if (b.buffer->getNumChannels() > 0) {
         auto* in = b.buffer->getReadPointer(0, b.startSample);
         float maxIn = 0;
-        for(int i=0; i<b.numSamples; ++i) maxIn = juce::jmax(maxIn, std::abs(in[i]));
-        inputMeter.setLevel(maxIn * 3.0f);
-        if (activeRecordingId != "") {
-            auto& buf = voxBuffers[activeRecordingId];
-            for (int i=0; i<b.numSamples; ++i) { 
-                if (writePosition < buf.getNumSamples()) buf.setSample(0, writePosition++, in[i] * 2.0f); 
-                else { activeRecordingId = ""; for(auto* sv : sectionViews) sv->setRecording(false); }
+        for(int i=0; i<b.numSamples; ++i) {
+            float smp = std::abs(in[i]);
+            maxIn = juce::jmax(maxIn, smp);
+            // RECORDING PRE-AMP BOOST
+            if (activeRecordingId != "") {
+                auto& buf = voxBuffers[activeRecordingId];
+                if (writePosition < buf.getNumSamples()) 
+                    buf.setSample(0, writePosition++, in[i] * 2.0f); // 2x boost
+                else { activeRecordingId = ""; }
             }
         }
+        inputMeter.setLevel(maxIn * 4.0f); // High visibility
     }
     b.clearActiveBufferRegion(); synth.renderNextBlock (*b.buffer, {}, b.startSample, b.numSamples);
+    juce::dsp::AudioBlock<float> block(*b.buffer);
+    reverb.process(juce::dsp::ProcessContextReplacing<float>(block));
+    visualizer.pushBuffer(*b.buffer);
 }
 
 void MainComponent::paint (juce::Graphics& g) {
@@ -247,6 +256,7 @@ void MainComponent::paint (juce::Graphics& g) {
 
 void MainComponent::resized() {
     auto area = getLocalBounds().reduced(30); area.removeFromTop(80);
+    visualizer.setBounds(area.removeFromTop(60).reduced(10));
     timelineViewport.setBounds(area.removeFromTop(200).reduced(10));
     area.removeFromTop(10);
     auto controlRow = area.removeFromTop(130);
@@ -274,7 +284,7 @@ void MainComponent::resized() {
     auto sl7 = sliderPanel.removeFromLeft(sWidth); voxPitchLabel.setBounds(sl7.removeFromTop(25)); voxPitchSlider.setBounds(sl7.reduced(5));
     auto sl8 = sliderPanel; voxWetLabel.setBounds(sl8.removeFromTop(25)); voxWetSlider.setBounds(sl8.reduced(5));
     auto bottom = area.removeFromBottom(140);
-    playButton.setBounds(bottom.removeFromTop(70).reduced(300, 0));
+    playButton.setBounds(bottom.removeFromTop(70).reduced(250, 0));
     auto sideActions = bottom.reduced(50, 10);
     reGenKitBtn.setBounds(sideActions.removeFromLeft(120).reduced(5, 10)); exportWavBtn.setBounds(sideActions.removeFromRight(120).reduced(5, 10));
     settingsBtn.setBounds(sideActions.removeFromLeft(120).reduced(5, 10));

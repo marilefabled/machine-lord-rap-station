@@ -23,6 +23,30 @@ private:
     float level = 0.0f;
 };
 
+// --- PREMIUM: Audio Visualizer ---
+class AudioVisualizer : public juce::Component, public juce::Timer {
+public:
+    AudioVisualizer() { startTimer(40); }
+    void pushBuffer(const juce::AudioBuffer<float>& buffer) {
+        if (buffer.getNumSamples() > 0) {
+            float level = buffer.getMagnitude(0, 0, buffer.getNumSamples());
+            levels.push_back(level);
+            if (levels.size() > 100) levels.erase(levels.begin());
+        }
+    }
+    void paint(juce::Graphics& g) override {
+        g.setColour(juce::Colours::orange.withAlpha(0.3f));
+        auto w = (float)getWidth() / 100.0f;
+        for (int i=0; i < (int)levels.size(); ++i) {
+            float h = levels[i] * getHeight() * 2.0f;
+            g.fillRect((float)i * w, (float)getHeight() - h, w - 1.0f, h);
+        }
+    }
+    void timerCallback() override { repaint(); }
+private:
+    std::vector<float> levels;
+};
+
 class SectionComponent : public juce::Component {
 public:
     SectionComponent(BeatGenerator::Section& s, std::function<void()> regen, std::function<void()> record, std::function<void()> regenDrums) 
@@ -44,7 +68,7 @@ public:
         auto area = getLocalBounds().toFloat();
         g.setColour(c.withAlpha(0.15f)); g.fillRoundedRectangle(area, 6.0f);
         g.setColour(c.withAlpha(0.4f)); g.drawRoundedRectangle(area, 6.0f, 2.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.9f)); g.setFont(juce::FontOptions(16.0f).withStyle("Bold"));
+        g.setColour(juce::Colours::white.withAlpha(0.9f)); g.setFont(juce::Font(juce::FontOptions(16.0f).withStyle("Bold")));
         juce::String names[] = {"INTRO", "VERSE", "HOOK", "OUTRO"};
         g.drawText(names[section.type], getLocalBounds().removeFromTop(30), juce::Justification::centred);
     }
@@ -86,7 +110,9 @@ private:
     juce::Label tempoLabel, swingLabel, fillLabel, ghostLabel, dramaLabel, styleLabel, keyLabel, scaleLabel;
     juce::Label voxChopLabel, voxPitchLabel, voxWetLabel, voxMangleLabel;
     LevelMeter inputMeter;
+    AudioVisualizer visualizer;
 
+    // Arrangement Buttons
     juce::TextButton addIntroBtn{"+I"}, addVerseBtn{"+V"}, addHookBtn{"+H"}, addOutroBtn{"+O"}, clearArrBtn{"CLR"};
     std::vector<BeatGenerator::SectionType> currentArrangement;
 
@@ -96,6 +122,8 @@ private:
     int writePosition = 0;
 
     juce::Synthesiser synth;
+    juce::dsp::Reverb reverb;
+    
     BeatGenerator::Song currentSong;
     int currentSectionIndex = 0, songStepCounter = 0;
     bool isPlaying = false;
